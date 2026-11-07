@@ -232,7 +232,7 @@ def create(
         ID_OF = staticmethod(id_of)
 
         _APPLICABLE_VALIDATORS = applicable_validators
-        _validators = field(init=False, repr=False, eq=False)
+        _validators = field(init=False, default=None, repr=False, eq=False)
 
         schema: referencing.jsonschema.Schema = field(repr=reprlib.repr)
         _ref_resolver = field(default=None, repr=False, alias="resolver")
@@ -289,15 +289,6 @@ def create(
                     registry = SPECIFICATIONS.combine(registry)
                 resource = specification.create_resource(self.schema)
                 self._resolver = registry.resolver_with_root(resource)
-
-            if self.schema is True or self.schema is False:
-                self._validators = []
-            else:
-                self._validators = [
-                    (self.VALIDATORS[k], k, v)
-                    for k, v in applicable_validators(self.schema)
-                    if k in self.VALIDATORS
-                ]
 
             # REMOVEME: Legacy ref resolution state management.
             push_scope = getattr(self._ref_resolver, "push_scope", None)
@@ -367,7 +358,18 @@ def create(
                     if k in self.VALIDATORS
                 ]
             else:
+                # Built lazily: validators created by descend() never use it.
                 _schema, validators = self.schema, self._validators
+                if validators is None:
+                    if _schema is True or _schema is False:
+                        validators = []
+                    else:
+                        validators = [
+                            (self.VALIDATORS[k], k, v)
+                            for k, v in applicable_validators(_schema)
+                            if k in self.VALIDATORS
+                        ]
+                    self._validators = validators
 
             if _schema is True:
                 return
@@ -422,9 +424,13 @@ def create(
                 evolved = self.evolve(schema=schema)
             else:
                 if resolver is None:
-                    resolver = self._resolver.in_subresource(
-                        specification.create_resource(schema),
-                    )
+                    # Only subschemas with their own id change the base URI.
+                    if specification.id_of(schema) is None:
+                        resolver = self._resolver
+                    else:
+                        resolver = self._resolver.in_subresource(
+                            specification.create_resource(schema),
+                        )
                 evolved = self.evolve(schema=schema, _resolver=resolver)
 
             for k, v in applicable_validators(schema):
